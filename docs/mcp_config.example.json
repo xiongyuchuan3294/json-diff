@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "json-regression": {
+      "command": "python3",
+      "args": [
+        "scripts/regression_mcp_server.py"
+      ],
+      "cwd": "/path/to/json-diff",
+      "env": {
+        "MYSQL_DEMO_CONF": "127.0.0.1,3308,demo_db,dev,123456,utf8mb4",
+        "REGRESSION_TARGET_SCHEMA": "rrs_test_dev"
+      }
+    }
+  }
+}

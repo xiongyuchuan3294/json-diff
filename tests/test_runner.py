@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 import sys
@@ -33,7 +33,7 @@ class RunnerHelperTest(unittest.TestCase):
 
     def test_default_batch_code_format(self):
         value = default_batch_code("biz#old#20260309_01", "biz#new#20260309_01")
-        self.assertRegex(value, r"^REG_old_new_\d{8}_\d{6}$")
+        self.assertRegex(value, r"^REG_old_new_\d{8}_\d{6}_\d{6}$")
 
     def test_normalize_trace_id(self):
         self.assertEqual(normalize_trace_id("  abc123  "), "abc123")

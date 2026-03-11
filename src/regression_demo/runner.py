@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,6 +8,17 @@ from typing import Any
 from .config import TARGET_SCHEMA, get_demo_db_config, with_database
 from .db import DbClient
 from .normalizer import normalize_path
+from .replay import (
+    ReplayJobParams as ReplayFlowParams,
+    collect_replay_preflight,
+    normalize_replay_trace_ids_arg,
+    run_replay_job,
+    validate_replay_runtime_options,
+)
+from .result_utils import (
+    normalize_trace_id as _normalize_trace_id,
+    split_trace_ids_by_compare_status as _split_trace_ids_by_compare_status,
+)
 from .reporting import write_report
 from .service import (
     build_request_index,
@@ -35,6 +46,16 @@ class RegressionJobParams:
     fuzzy_match: bool = False
     old_trace_id: str = ""
     new_trace_id: str = ""
+    replay: bool = False
+    replay_target_base_url: str = ""
+    replay_source_scenario_id: str = ""
+    replay_trace_ids: str = ""
+    replay_speed_factor: float = 1.0
+    replay_min_gap_ms: int = 300
+    replay_max_gap_ms: int = 3000
+    replay_timeout_ms: int = 10000
+    replay_retries: int = 1
+    replay_code: str = ""
 
 
 def normalize_api_paths(api_paths_arg: str | None) -> list[str]:
@@ -50,7 +71,7 @@ def normalize_api_paths(api_paths_arg: str | None) -> list[str]:
 
 
 def normalize_trace_id(trace_id: str | None) -> str:
-    return (trace_id or "").strip()
+    return _normalize_trace_id(trace_id)
 
 
 def has_trace_pair(old_trace_id: str | None, new_trace_id: str | None) -> bool:
@@ -58,29 +79,12 @@ def has_trace_pair(old_trace_id: str | None, new_trace_id: str | None) -> bool:
 
 
 def split_trace_ids_by_compare_status(results: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-    success_trace_ids: list[str] = []
-    failed_trace_ids: list[str] = []
-
-    def append_unique(container: list[str], value: str) -> None:
-        if value and value not in container:
-            container.append(value)
-
-    for row in results:
-        if str(row.get("pair_status") or "").upper() != "MATCHED":
-            continue
-        compare_status = str(row.get("compare_status") or "").upper()
-        diff_level = str(row.get("diff_level") or "").upper()
-        is_success = compare_status == "SUCCESS" and diff_level != "BLOCK"
-        target = success_trace_ids if is_success else failed_trace_ids
-        for key in ("old_trace_id", "new_trace_id"):
-            trace_id = normalize_trace_id(row.get(key))
-            append_unique(target, trace_id)
-
-    return success_trace_ids, failed_trace_ids
+    return _split_trace_ids_by_compare_status(results)
 
 
 def default_batch_code(old_scenario_id: str, new_scenario_id: str) -> str:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Include microseconds to avoid duplicate batch_code in near-concurrent runs.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     old_value = (old_scenario_id or "old").strip()
     new_value = (new_scenario_id or "new").strip()
     old_tag = old_value.split("#")[1] if "#" in old_value and len(old_value.split("#")) > 1 else "old"
@@ -215,37 +219,102 @@ def _collect_trace_pair_preflight(db: DbClient, old_trace_id: str, new_trace_id:
 
 def run_regression_job(params: RegressionJobParams, root: Path | None = None) -> dict[str, Any]:
     project_root = root or Path(__file__).resolve().parents[2]
+    selected_paths = normalize_api_paths(params.api_paths_arg)
+    target_db = DbClient(with_database(get_demo_db_config(), TARGET_SCHEMA))
+    replay_result: dict[str, Any] | None = None
+    replay_preflight: dict[str, Any] | None = None
+
     old_trace_id = normalize_trace_id(params.old_trace_id)
     new_trace_id = normalize_trace_id(params.new_trace_id)
     trace_mode = has_trace_pair(old_trace_id, new_trace_id)
-
-    selected_paths = normalize_api_paths(params.api_paths_arg)
-    scope_msg = "ALL_API_PATHS" if not selected_paths else ",".join(selected_paths)
-    if trace_mode:
-        scope_msg = f"TRACE_ID_PAIR:{old_trace_id},{new_trace_id}"
-
-    target_db = DbClient(with_database(get_demo_db_config(), TARGET_SCHEMA))
-    preflight = (
-        _collect_trace_pair_preflight(target_db, old_trace_id, new_trace_id)
-        if trace_mode
-        else _collect_preflight(target_db, params.old_scenario_id, params.new_scenario_id, selected_paths, params.fuzzy_match)
-    )
-
-    if params.dry_run:
-        return {
-            "mode": "DRY_RUN",
-            "schema": TARGET_SCHEMA,
-            "scope": scope_msg,
-            "preflight": preflight,
-        }
-
     old_scenario_id = params.old_scenario_id
     new_scenario_id = params.new_scenario_id
-    if trace_mode:
-        if preflight["old_selected_count"] != 1 or preflight["new_selected_count"] != 1:
-            raise ValueError("trace_id pair must match exactly one old sample and one new sample")
-        old_scenario_id = old_scenario_id or preflight.get("old_scenario_id", "") or "trace-old"
-        new_scenario_id = new_scenario_id or preflight.get("new_scenario_id", "") or "trace-new"
+
+    if params.replay:
+        replay_validation_error = validate_replay_runtime_options(
+            target_base_url=params.replay_target_base_url,
+            replay_speed_factor=params.replay_speed_factor,
+            replay_min_gap_ms=params.replay_min_gap_ms,
+            replay_max_gap_ms=params.replay_max_gap_ms,
+            replay_timeout_ms=params.replay_timeout_ms,
+            replay_retries=params.replay_retries,
+        )
+        if replay_validation_error is not None:
+            raise ValueError(replay_validation_error.message)
+
+        replay_trace_ids = normalize_replay_trace_ids_arg(params.replay_trace_ids)
+        replay_preflight = collect_replay_preflight(
+            target_db,
+            source_scenario_id=(params.replay_source_scenario_id or "").strip(),
+            trace_ids=replay_trace_ids,
+            api_paths=selected_paths,
+            fuzzy_match=params.fuzzy_match,
+        )
+        scope_msg = (
+            f"REPLAY_SCENARIO:{params.replay_source_scenario_id}"
+            if params.replay_source_scenario_id
+            else f"REPLAY_TRACE_IDS:{','.join(replay_trace_ids)}"
+        )
+        if params.dry_run:
+            return {
+                "mode": "DRY_RUN",
+                "schema": TARGET_SCHEMA,
+                "scope": scope_msg,
+                "preflight": replay_preflight,
+            }
+
+        replay_result = run_replay_job(
+            target_db,
+            ReplayFlowParams(
+                target_base_url=params.replay_target_base_url,
+                source_scenario_id=(params.replay_source_scenario_id or "").strip(),
+                trace_ids=tuple(replay_trace_ids),
+                api_paths=tuple(selected_paths),
+                fuzzy_match=params.fuzzy_match,
+                speed_factor=params.replay_speed_factor,
+                min_gap_ms=params.replay_min_gap_ms,
+                max_gap_ms=params.replay_max_gap_ms,
+                timeout_ms=params.replay_timeout_ms,
+                retries=params.replay_retries,
+                replay_code=params.replay_code,
+                replay_name=f"{params.batch_name}-回放",
+                biz_name=params.biz_name,
+                operator=params.operator,
+                remark=params.remark,
+            ),
+        )
+        old_scenario_id = str(replay_result.get("source_scenario_id") or "")
+        new_scenario_id = str(replay_result.get("replay_scenario_id") or "")
+        replay_paths = replay_result.get("selected_api_paths") or []
+        selected_paths = [str(path) for path in replay_paths if str(path).strip()]
+        preflight = _collect_preflight(target_db, old_scenario_id, new_scenario_id, selected_paths, params.fuzzy_match)
+        trace_mode = False
+        old_trace_id = ""
+        new_trace_id = ""
+        scope_msg = f"REPLAY_DIFF:{old_scenario_id}->{new_scenario_id}"
+    else:
+        scope_msg = "ALL_API_PATHS" if not selected_paths else ",".join(selected_paths)
+        if trace_mode:
+            scope_msg = f"TRACE_ID_PAIR:{old_trace_id},{new_trace_id}"
+        preflight = (
+            _collect_trace_pair_preflight(target_db, old_trace_id, new_trace_id)
+            if trace_mode
+            else _collect_preflight(target_db, params.old_scenario_id, params.new_scenario_id, selected_paths, params.fuzzy_match)
+        )
+
+        if params.dry_run:
+            return {
+                "mode": "DRY_RUN",
+                "schema": TARGET_SCHEMA,
+                "scope": scope_msg,
+                "preflight": preflight,
+            }
+
+        if trace_mode:
+            if preflight["old_selected_count"] != 1 or preflight["new_selected_count"] != 1:
+                raise ValueError("trace_id pair must match exactly one old sample and one new sample")
+            old_scenario_id = old_scenario_id or preflight.get("old_scenario_id", "") or "trace-old"
+            new_scenario_id = new_scenario_id or preflight.get("new_scenario_id", "") or "trace-new"
 
     batch_code = params.batch_code or default_batch_code(old_scenario_id, new_scenario_id)
 
@@ -301,8 +370,8 @@ def run_regression_job(params: RegressionJobParams, root: Path | None = None) ->
     if params.write_latest:
         latest_file = write_report(report, project_root / "output" / "latest.md")
 
-    return {
-        "mode": "RUN",
+    result = {
+        "mode": "REPLAY_RUN" if replay_result else "RUN",
         "batch_id": batch_id,
         "batch_code": batch_code,
         "schema": TARGET_SCHEMA,
@@ -315,3 +384,11 @@ def run_regression_job(params: RegressionJobParams, root: Path | None = None) ->
         "compare_failed_trace_ids": failed_trace_ids,
         "preflight": preflight,
     }
+    if replay_result:
+        result["replay"] = replay_result
+        result["replay_preflight"] = replay_result.get("preflight") or replay_preflight or {}
+        result["diff_preflight"] = preflight
+        result["replay_batch_id"] = replay_result.get("replay_batch_id")
+        result["replay_scenario_id"] = replay_result.get("replay_scenario_id")
+        result["replay_stats"] = replay_result.get("stats", {})
+    return result

@@ -72,10 +72,24 @@ def _content(items: list[tuple[str, str, float]]) -> list[dict[str, Any]]:
 def seed_rules(db: DbClient) -> None:
     sql = f"""
     INSERT INTO `{TARGET_SCHEMA}`.`t_compare_rule`
-    (`rule_code`,`rule_name`,`scope_type`,`sysid`,`api_path`,`target_json_path`,`ignore_paths`,`array_compare_mode`,`array_key_map`,`priority`,`enabled`,`creator`)
+    (`rule_code`,`rule_name`,`scope_type`,`sysid`,`api_path`,`target_json_path`,`ignore_paths`,`array_compare_mode`,`array_key_map`,`value_equivalence_rule`,`severity_rule`,`priority`,`enabled`,`creator`)
     VALUES
-    (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s),
-    (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s),
+    (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    ON DUPLICATE KEY UPDATE
+      `rule_name`=VALUES(`rule_name`),
+      `scope_type`=VALUES(`scope_type`),
+      `sysid`=VALUES(`sysid`),
+      `api_path`=VALUES(`api_path`),
+      `target_json_path`=VALUES(`target_json_path`),
+      `ignore_paths`=VALUES(`ignore_paths`),
+      `array_compare_mode`=VALUES(`array_compare_mode`),
+      `array_key_map`=VALUES(`array_key_map`),
+      `value_equivalence_rule`=VALUES(`value_equivalence_rule`),
+      `severity_rule`=VALUES(`severity_rule`),
+      `priority`=VALUES(`priority`),
+      `enabled`=VALUES(`enabled`),
+      `creator`=VALUES(`creator`)
     """
     params = [
         (
@@ -88,6 +102,20 @@ def seed_rules(db: DbClient) -> None:
             _json(["$.timestamp"]),
             None,
             None,
+            _json({
+                "rules": [
+                    {"path": "$.data.content[*].transAmount", "operators": ["NUMERIC_EQ"]},
+                    {"path": "$.data.content[*].memo", "operators": ["NULL_EMPTY_STRING_EQ"]},
+                ]
+            }),
+            _json({
+                "default": "NORMAL",
+                "rules": [
+                    {"path": "$.retCode", "severity": "BLOCK"},
+                    {"path": "$.success", "severity": "BLOCK"},
+                    {"path": "$.timestamp", "severity": "IGNORABLE"},
+                ],
+            }),
             10,
             1,
             "codex",
@@ -102,6 +130,13 @@ def seed_rules(db: DbClient) -> None:
             _json([]),
             "BY_KEY",
             _json({"$.data.content": "transactionkey"}),
+            None,
+            _json({
+                "rules": [
+                    {"path": "$.data.totalCount", "severity": "NORMAL"},
+                    {"path": "$.data.totalPage", "severity": "NORMAL"},
+                ]
+            }),
             20,
             1,
             "codex",
@@ -222,5 +257,24 @@ def seed_request_info(db: DbClient) -> None:
     INSERT INTO `{TARGET_SCHEMA}`.`t_request_info`
     (`trace_id`,`sysid`,`client_ip`,`url`,`method`,`headers`,`query_params`,`request_body`,`page_url`,`scenario_id`,`start_time`,`start_time_ms`,`end_time`,`end_time_ms`,`trace_stack_md5`,`status_code`,`response_body`,`duration`)
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    ON DUPLICATE KEY UPDATE
+      `sysid`=VALUES(`sysid`),
+      `client_ip`=VALUES(`client_ip`),
+      `url`=VALUES(`url`),
+      `method`=VALUES(`method`),
+      `headers`=VALUES(`headers`),
+      `query_params`=VALUES(`query_params`),
+      `request_body`=VALUES(`request_body`),
+      `page_url`=VALUES(`page_url`),
+      `scenario_id`=VALUES(`scenario_id`),
+      `start_time`=VALUES(`start_time`),
+      `start_time_ms`=VALUES(`start_time_ms`),
+      `end_time`=VALUES(`end_time`),
+      `end_time_ms`=VALUES(`end_time_ms`),
+      `trace_stack_md5`=VALUES(`trace_stack_md5`),
+      `status_code`=VALUES(`status_code`),
+      `response_body`=VALUES(`response_body`),
+      `duration`=VALUES(`duration`),
+      `deleted`=0
     """
     db.executemany(sql, rows)

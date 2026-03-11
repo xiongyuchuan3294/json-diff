@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+
+# Runtime reports and temp output
+output/*
+!output/.gitkeep

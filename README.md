@@ -50,6 +50,11 @@ export REGRESSION_TARGET_SCHEMA='rrs_test_dev'
 
 ## 2. 初始化命令
 
+初始化文件职责说明：
+
+- `sql/schema_rrs_test_dev.sql`：仅 DDL（建库/建表）
+- `sql/init_rrs_test_dev.sql`：种子数据（可选，用于演示或手工导入）
+
 ### 2.1 生产初始化（推荐，仅建表）
 
 ```bash
@@ -103,7 +108,27 @@ python3 scripts/regression_cli.py --old-trace-id "OLD_TRACE_ID" --new-trace-id "
 - `--old-trace-id/--new-trace-id` 必须同时传。
 - 这里必须是 `trace_id`，不是 `scenario_id`。
 
-### 3.3 常用可选参数
+### 3.3 回放 + 自动 Diff 模式
+
+按场景回放并自动对比：
+
+```bash
+python3 scripts/regression_cli.py "ALL" \
+  --replay \
+  --replay-target-base-url "https://jsonplaceholder.typicode.com" \
+  --replay-source-scenario-id "demo#old#20260311_01"
+```
+
+按 trace_id 回放并自动对比：
+
+```bash
+python3 scripts/regression_cli.py \
+  --replay \
+  --replay-target-base-url "https://jsonplaceholder.typicode.com" \
+  --replay-trace-ids "TRACE_ID_1,TRACE_ID_2"
+```
+
+### 3.4 常用可选参数
 
 预检查不落库：
 
@@ -129,15 +154,11 @@ python3 scripts/regression_cli.py "ALL" "old_scenario_id" "new_scenario_id" \
   --report-path "output/custom_report.md"
 ```
 
-## 4. 兼容/演示入口
+## 4. 演示入口
 
-### 4.1 兼容入口（计划 2026-06-30 弃用）
+兼容入口已于 `2026-03-11` 下线，统一使用稳定主入口 `scripts/regression_cli.py`。
 
-```bash
-python3 scripts/run_regression_only.py --old-scenario-id "old_scenario_id" --new-scenario-id "new_scenario_id"
-```
-
-### 4.2 一键演示入口（会清表 + 造数 + 比对）
+### 4.1 一键演示入口（会清表 + 造数 + 比对）
 
 ```bash
 python3 scripts/run_demo.py
@@ -148,7 +169,7 @@ python3 scripts/run_demo.py
 全量（含 e2e）：
 
 ```bash
-python3 -m unittest tests/test_runner.py tests/test_diff_engine.py tests/test_service.py tests/test_e2e.py -v
+python3 -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 仅 e2e（指定批次）：
@@ -198,6 +219,21 @@ python3 scripts/regression_mcp_server.py
 
 客户端配置样例见：`docs/mcp_config.example.json`
 
+主要工具：
+
+- `run_regression_by_scenario`
+- `run_regression_by_scenario_and_api`
+- `run_regression_by_trace_pair`
+- `replay_and_diff_by_scenario`
+- `replay_and_diff_by_scenario_and_api`
+- `replay_and_diff_by_trace_ids`
+- `list_scenarios`
+- `list_api_paths`
+- `list_recent_batches`
+- `get_batch_report`
+
+兼容 MCP 工具（`run_api_regression` / `run_api_regression_advanced`）已于 `2026-03-11` 下线。
+
 ## 9. 其他文档
 
 设计和实现说明见 `docs/`：
@@ -206,3 +242,7 @@ python3 scripts/regression_mcp_server.py
 - [系统实现设计](docs/系统实现设计.md)
 - [规则配置设计](docs/规则配置设计.md)
 - [任务与报表设计](docs/任务与报表设计.md)
+- [MCP易用化接入方案](docs/MCP易用化接入方案.md)
+- [MCP业务调用手册](docs/MCP业务调用手册.md)
+- [MCP Prompt模板](docs/MCP-Prompt模板.md)
+- [兼容入口收敛计划](docs/兼容入口收敛计划.md)

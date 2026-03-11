@@ -7,11 +7,13 @@ from .db import DbClient
 
 
 def init_schema(db: DbClient) -> None:
-    db.execute_sql_file(Path("sql/init_rrs_test_dev.sql"))
+    db.execute_sql_file(Path("sql/schema_rrs_test_dev.sql"))
 
 
 def truncate_demo_tables(db: DbClient) -> None:
     tables = [
+        "t_replay_request",
+        "t_replay_batch",
         "t_compare_result_detail",
         "t_compare_result",
         "t_compare_rule",

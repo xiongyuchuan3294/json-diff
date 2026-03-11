@@ -1,4 +1,0 @@
-interface:
-  display_name: "Regression Compare CLI"
-  short_description: "Run API regression by three required parameters"
-  default_prompt: "Use $regression-compare-cli to run regression with api_paths, old_scenario_id, and new_scenario_id."

@@ -102,3 +102,22 @@ VALUES(1, 'TC001OLD_001', 'aml-web', '127.0.0.1', 'http://127.0.0.1:9982/aml/wst
 INSERT INTO rrs_test_dev.t_request_info
 (id, trace_id, sysid, client_ip, url, method, headers, query_params, request_body, page_url, scenario_id, start_time, start_time_ms, end_time, end_time_ms, trace_stack_md5, status_code, response_body, duration, create_time, update_time, deleted)
 VALUES(2, 'TC001NEW_002', 'aml-web', '127.0.0.1', 'http://127.0.0.1:9982/aml/wst/custTransInfo?pageSize=10&pageNum=1', 'POST', '{"content-type":"application/json;charset=UTF-8","x-page-url":"http://127.0.0.1:9982/aml/#/taskManagement/caseReportTask/caseView/tc001-new","user-agent":"Codex-Regression-Demo/1.0"}', '{"pageNum":"1","pageSize":"10"}', '{"custId":"TC001","caseDate":"2020-12-27","modelNo":"WSTY001"}', 'http://127.0.0.1:9982/aml/#/taskManagement/caseReportTask/caseView/tc001-new', 'custTransInfo#new#20260309_01', '2026-03-09 10:01:00', 100, '2026-03-09 10:01:00', 520, 'trace-stack-demo', 200, '{"success":true,"retMsg":"请求成功","retCode":0,"data":{"pageNum":1,"pageSize":10,"totalPage":1,"totalCount":2,"content":[{"transactionkey":"TX001","transTime":"2020-12-27 09:15:00.0","custName":"测试客户","receivePayCd":"付","transAmount":100.0,"drftNo":"DRFT-TX001","lastReqNm":"测试公司A","drwrNm":"测试公司B","sensitiveUuid":"uuid-TX001"},{"transactionkey":"TX002","transTime":"2020-12-27 09:15:00.0","custName":"测试客户","receivePayCd":"收","transAmount":200.0,"drftNo":"DRFT-TX002","lastReqNm":"测试公司A","drwrNm":"测试公司B","sensitiveUuid":"uuid-TX002"}]},"timestamp":2002}', 420, '2026-03-09 23:40:37', '2026-03-09 23:40:37', 0);
+INSERT INTO rrs_test_dev.t_compare_rule
+(rule_code, rule_name, scope_type, sysid, api_path, target_json_path, ignore_paths, array_compare_mode, array_key_map, value_equivalence_rule, severity_rule, priority, enabled, creator)
+VALUES
+('GLOBAL_IGNORE_DYNAMIC', '全局动态字段忽略', 'GLOBAL', NULL, NULL, NULL, '["$.timestamp"]', NULL, NULL, '{"rules":[{"path":"$.data.content[*].transAmount","operators":["NUMERIC_EQ"]},{"path":"$.data.content[*].memo","operators":["NULL_EMPTY_STRING_EQ"]}]}', '{"default":"NORMAL","rules":[{"path":"$.retCode","severity":"BLOCK"},{"path":"$.success","severity":"BLOCK"},{"path":"$.timestamp","severity":"IGNORABLE"}]}', 10, 1, 'codex'),
+('CUST_TRANS_INFO_ARRAY_BY_KEY', 'custTransInfo 数组按主键比较', 'API', 'aml-web', '/aml/wst/custTransInfo', NULL, '[]', 'BY_KEY', '{"$.data.content":"transactionkey"}', NULL, '{"rules":[{"path":"$.data.totalCount","severity":"NORMAL"},{"path":"$.data.totalPage","severity":"NORMAL"}]}', 20, 1, 'codex')
+ON DUPLICATE KEY UPDATE
+  rule_name = VALUES(rule_name),
+  scope_type = VALUES(scope_type),
+  sysid = VALUES(sysid),
+  api_path = VALUES(api_path),
+  target_json_path = VALUES(target_json_path),
+  ignore_paths = VALUES(ignore_paths),
+  array_compare_mode = VALUES(array_compare_mode),
+  array_key_map = VALUES(array_key_map),
+  value_equivalence_rule = VALUES(value_equivalence_rule),
+  severity_rule = VALUES(severity_rule),
+  priority = VALUES(priority),
+  enabled = VALUES(enabled),
+  creator = VALUES(creator);

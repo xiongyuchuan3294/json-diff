@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import sys
@@ -10,7 +10,13 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from regression_demo.runner import default_batch_code, normalize_api_paths
+from regression_demo.runner import (
+    default_batch_code,
+    has_trace_pair,
+    normalize_api_paths,
+    normalize_trace_id,
+    split_trace_ids_by_compare_status,
+)
 
 
 class RunnerHelperTest(unittest.TestCase):
@@ -28,6 +34,27 @@ class RunnerHelperTest(unittest.TestCase):
     def test_default_batch_code_format(self):
         value = default_batch_code("biz#old#20260309_01", "biz#new#20260309_01")
         self.assertRegex(value, r"^REG_old_new_\d{8}_\d{6}$")
+
+    def test_normalize_trace_id(self):
+        self.assertEqual(normalize_trace_id("  abc123  "), "abc123")
+        self.assertEqual(normalize_trace_id(None), "")
+
+    def test_has_trace_pair(self):
+        self.assertTrue(has_trace_pair("old", "new"))
+        self.assertFalse(has_trace_pair("old", ""))
+        self.assertFalse(has_trace_pair("", "new"))
+
+    def test_split_trace_ids_by_compare_status(self):
+        success_ids, failed_ids = split_trace_ids_by_compare_status(
+            [
+                {"compare_status": "SUCCESS", "old_trace_id": "S1", "new_trace_id": "S2"},
+                {"compare_status": "FAILED", "old_trace_id": "F1", "new_trace_id": "F2"},
+                {"compare_status": "SKIPPED", "old_trace_id": "F1", "new_trace_id": "F3"},
+                {"compare_status": "SUCCESS", "old_trace_id": "S1", "new_trace_id": "S3"},
+            ]
+        )
+        self.assertEqual(success_ids, ["S1", "S2", "S3"])
+        self.assertEqual(failed_ids, ["F1", "F2", "F3"])
 
 
 if __name__ == "__main__":

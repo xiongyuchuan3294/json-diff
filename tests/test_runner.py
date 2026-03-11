@@ -47,14 +47,15 @@ class RunnerHelperTest(unittest.TestCase):
     def test_split_trace_ids_by_compare_status(self):
         success_ids, failed_ids = split_trace_ids_by_compare_status(
             [
-                {"compare_status": "SUCCESS", "old_trace_id": "S1", "new_trace_id": "S2"},
-                {"compare_status": "FAILED", "old_trace_id": "F1", "new_trace_id": "F2"},
-                {"compare_status": "SKIPPED", "old_trace_id": "F1", "new_trace_id": "F3"},
-                {"compare_status": "SUCCESS", "old_trace_id": "S1", "new_trace_id": "S3"},
+                {"pair_status": "MATCHED", "compare_status": "SUCCESS", "diff_level": "SAME", "old_trace_id": "S1", "new_trace_id": "S2"},
+                {"pair_status": "MATCHED", "compare_status": "SUCCESS", "diff_level": "BLOCK", "old_trace_id": "B1", "new_trace_id": "B2"},
+                {"pair_status": "MATCHED", "compare_status": "FAILED", "diff_level": "BLOCK", "old_trace_id": "F1", "new_trace_id": "F2"},
+                {"pair_status": "ONLY_OLD", "compare_status": "SKIPPED", "old_trace_id": "F1", "new_trace_id": "F3"},
+                {"pair_status": "MATCHED", "compare_status": "SUCCESS", "diff_level": "NORMAL", "old_trace_id": "S1", "new_trace_id": "S3"},
             ]
         )
         self.assertEqual(success_ids, ["S1", "S2", "S3"])
-        self.assertEqual(failed_ids, ["F1", "F2", "F3"])
+        self.assertEqual(failed_ids, ["B1", "B2", "F1", "F2"])
 
 
 if __name__ == "__main__":

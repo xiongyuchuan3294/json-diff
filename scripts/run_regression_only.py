@@ -16,6 +16,14 @@ from regression_demo.runner import RegressionJobParams, normalize_api_paths, run
 DEPRECATION_DATE = "2026-06-30"
 
 
+def _print_trace_id_lines(title: str, trace_ids: list[str]) -> None:
+    print(title)
+    last_index = len(trace_ids) - 1
+    for index, trace_id in enumerate(trace_ids):
+        suffix = "," if index < last_index else ""
+        print(f"'{trace_id}'{suffix}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=f"只执行回归比对（兼容入口，计划于 {DEPRECATION_DATE} 弃用）"
@@ -81,6 +89,8 @@ def main() -> int:
     print(f"[OK] regression done, batch_id={result['batch_id']}, batch_code={result['batch_code']}")
     print(f"[OK] indexed={result['indexed_count']}, stats={result['stats']}")
     print(f"[OK] report={result['report_path']}")
+    _print_trace_id_lines("对比成功 trace_id:", result.get("compare_success_trace_ids", []))
+    _print_trace_id_lines("对比失败 trace_id:", result.get("compare_failed_trace_ids", []))
     return 0
 
 

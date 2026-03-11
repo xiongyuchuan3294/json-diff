@@ -202,6 +202,41 @@ def _update_batch_stats(
     )
 
 
+def _parse_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pick_latest_sample(rows: Sequence[dict]) -> dict | None:
+    if not rows:
+        return None
+
+    def sort_key(row: dict) -> tuple[datetime, int, int]:
+        end_time = _parse_datetime(row.get("request_end_time")) or datetime.min
+        end_time_ms = _safe_int(row.get("request_end_time_ms"))
+        request_info_id = _safe_int(row.get("request_info_id"))
+        return end_time, end_time_ms, request_info_id
+
+    return max(rows, key=sort_key)
+
+
 def run_regression(
     db: DbClient,
     batch_id: int,
@@ -243,7 +278,7 @@ def run_regression(
 
     index_rows = db.query(
         f"""
-        SELECT idx.*, req.status_code, req.response_body
+        SELECT idx.*, req.status_code, req.response_body, req.end_time AS request_end_time, req.end_time_ms AS request_end_time_ms
         FROM `{TARGET_SCHEMA}`.`t_request_compare_index` idx
         JOIN `{TARGET_SCHEMA}`.`t_request_info` req ON req.id = idx.request_info_id
         WHERE idx.scenario_id IN (%s, %s)
@@ -270,95 +305,17 @@ def run_regression(
         sysid = sample.get("sysid")
 
         if len(old_rows) == 0:
-            _insert_result(
-                db,
-                batch_id,
-                old_scenario_id,
-                new_scenario_id,
-                fingerprint,
-                sysid,
-                method,
-                path_value,
-                None,
-                new_rows[0],
-                "ONLY_NEW",
-                "SKIPPED",
-                "BLOCK",
-                0,
-                "new side has sample but old side missing",
-                [],
-            )
-            stats["only_new_count"] += 1
             continue
 
         if len(new_rows) == 0:
-            _insert_result(
-                db,
-                batch_id,
-                old_scenario_id,
-                new_scenario_id,
-                fingerprint,
-                sysid,
-                method,
-                path_value,
-                old_rows[0],
-                None,
-                "ONLY_OLD",
-                "SKIPPED",
-                "BLOCK",
-                0,
-                "old side has sample but new side missing",
-                [],
-            )
-            stats["only_old_count"] += 1
             continue
 
-        if len(old_rows) > 1:
-            _insert_result(
-                db,
-                batch_id,
-                old_scenario_id,
-                new_scenario_id,
-                fingerprint,
-                sysid,
-                method,
-                path_value,
-                old_rows[0],
-                new_rows[0],
-                "MULTI_OLD",
-                "SKIPPED",
-                "BLOCK",
-                0,
-                f"old side has duplicated samples: {len(old_rows)}",
-                [],
-            )
+        old_row = _pick_latest_sample(old_rows)
+        new_row = _pick_latest_sample(new_rows)
+        if not old_row or not new_row:
             stats["invalid_count"] += 1
             continue
 
-        if len(new_rows) > 1:
-            _insert_result(
-                db,
-                batch_id,
-                old_scenario_id,
-                new_scenario_id,
-                fingerprint,
-                sysid,
-                method,
-                path_value,
-                old_rows[0],
-                new_rows[0],
-                "MULTI_NEW",
-                "SKIPPED",
-                "BLOCK",
-                0,
-                f"new side has duplicated samples: {len(new_rows)}",
-                [],
-            )
-            stats["invalid_count"] += 1
-            continue
-
-        old_row = old_rows[0]
-        new_row = new_rows[0]
         rules = load_rules(_load_rule_rows(db, path_value))
         compare_status, diff_level, diffs = compare_json_text(
             old_row.get("response_body"),
@@ -367,6 +324,7 @@ def run_regression(
             new_row.get("status_code"),
             rules,
         )
+        compare_status = _normalize_compare_status(compare_status, diff_level)
         summary = _build_summary(compare_status, diff_level, diffs)
         _insert_result(
             db,
@@ -398,8 +356,8 @@ def run_regression(
         db,
         batch_id,
         status="SUCCESS",
-        total_sample_count=len(index_rows),
-        pairable_count=len(grouped),
+        total_sample_count=stats.get("matched_count", 0),
+        pairable_count=stats.get("matched_count", 0),
         stats=stats,
     )
     return dict(stats)
@@ -430,7 +388,9 @@ def run_regression_by_trace_ids(
             req.url,
             idx.normalized_path,
             req.status_code,
-            req.response_body
+            req.response_body,
+            req.end_time AS request_end_time,
+            req.end_time_ms AS request_end_time_ms
         FROM `{TARGET_SCHEMA}`.`t_request_info` req
         LEFT JOIN `{TARGET_SCHEMA}`.`t_request_compare_index` idx ON idx.request_info_id = req.id
         WHERE req.deleted = 0
@@ -445,115 +405,10 @@ def run_regression_by_trace_ids(
 
     stats: Counter = Counter()
     fingerprint = f"TRACE_PAIR::{old_trace_id}::{new_trace_id}"
+    old_row = _pick_latest_sample(old_rows)
+    new_row = _pick_latest_sample(new_rows)
 
-    if len(old_rows) > 1:
-        sample = old_rows[0]
-        _insert_result(
-            db,
-            batch_id,
-            old_scenario_id,
-            new_scenario_id,
-            fingerprint,
-            sample.get("sysid"),
-            sample.get("method") or "UNKNOWN",
-            sample.get("normalized_path") or normalize_path(sample.get("url") or ""),
-            sample,
-            new_rows[0] if new_rows else None,
-            "MULTI_OLD",
-            "SKIPPED",
-            "BLOCK",
-            0,
-            f"old trace_id matched duplicated samples: {len(old_rows)}",
-            [],
-        )
-        stats["invalid_count"] += 1
-        _update_batch_stats(
-            db,
-            batch_id,
-            status="SUCCESS",
-            total_sample_count=len(rows),
-            pairable_count=1 if rows else 0,
-            stats=stats,
-        )
-        return dict(stats)
-
-    if len(new_rows) > 1:
-        sample = new_rows[0]
-        _insert_result(
-            db,
-            batch_id,
-            old_scenario_id,
-            new_scenario_id,
-            fingerprint,
-            sample.get("sysid"),
-            sample.get("method") or "UNKNOWN",
-            sample.get("normalized_path") or normalize_path(sample.get("url") or ""),
-            old_rows[0] if old_rows else None,
-            sample,
-            "MULTI_NEW",
-            "SKIPPED",
-            "BLOCK",
-            0,
-            f"new trace_id matched duplicated samples: {len(new_rows)}",
-            [],
-        )
-        stats["invalid_count"] += 1
-        _update_batch_stats(
-            db,
-            batch_id,
-            status="SUCCESS",
-            total_sample_count=len(rows),
-            pairable_count=1 if rows else 0,
-            stats=stats,
-        )
-        return dict(stats)
-
-    old_row = old_rows[0] if old_rows else None
-    new_row = new_rows[0] if new_rows else None
-
-    if not old_row and new_row:
-        path_value = new_row.get("normalized_path") or normalize_path(new_row.get("url") or "")
-        _insert_result(
-            db,
-            batch_id,
-            old_scenario_id,
-            new_scenario_id,
-            fingerprint,
-            new_row.get("sysid"),
-            new_row.get("method") or "UNKNOWN",
-            path_value,
-            None,
-            new_row,
-            "ONLY_NEW",
-            "SKIPPED",
-            "BLOCK",
-            0,
-            f"old trace_id not found: {old_trace_id}",
-            [],
-        )
-        stats["only_new_count"] += 1
-    elif old_row and not new_row:
-        path_value = old_row.get("normalized_path") or normalize_path(old_row.get("url") or "")
-        _insert_result(
-            db,
-            batch_id,
-            old_scenario_id,
-            new_scenario_id,
-            fingerprint,
-            old_row.get("sysid"),
-            old_row.get("method") or "UNKNOWN",
-            path_value,
-            old_row,
-            None,
-            "ONLY_OLD",
-            "SKIPPED",
-            "BLOCK",
-            0,
-            f"new trace_id not found: {new_trace_id}",
-            [],
-        )
-        stats["only_old_count"] += 1
-    elif old_row and new_row:
+    if old_row and new_row:
         path_value = (
             old_row.get("normalized_path")
             or new_row.get("normalized_path")
@@ -569,6 +424,7 @@ def run_regression_by_trace_ids(
             new_row.get("status_code"),
             rules,
         )
+        compare_status = _normalize_compare_status(compare_status, diff_level)
         summary = _build_summary(compare_status, diff_level, diffs)
         _insert_result(
             db,
@@ -600,8 +456,8 @@ def run_regression_by_trace_ids(
         db,
         batch_id,
         status="SUCCESS",
-        total_sample_count=len(rows),
-        pairable_count=1 if rows else 0,
+        total_sample_count=stats.get("matched_count", 0),
+        pairable_count=stats.get("matched_count", 0),
         stats=stats,
     )
     return dict(stats)
@@ -609,13 +465,24 @@ def run_regression_by_trace_ids(
 
 def _build_summary(compare_status: str, diff_level: str, diffs: list[DiffItem]) -> str:
     if compare_status == "FAILED":
-        return diffs[0].rule_source if diffs else "compare failed"
+        if diffs and diffs[0].diff_type == "INVALID_JSON":
+            return diffs[0].rule_source
+        if not diffs:
+            return "compare failed"
+        parts = [f"{item.json_path}:{item.diff_type}" for item in diffs[:3]]
+        return "; ".join(parts)
     if diff_level == "SAME":
         return "responses are same"
     if not diffs:
         return f"compare_status={compare_status}, diff_level={diff_level}"
     parts = [f"{item.json_path}:{item.diff_type}" for item in diffs[:3]]
     return "; ".join(parts)
+
+
+def _normalize_compare_status(compare_status: str, diff_level: str) -> str:
+    if str(diff_level).upper() == "BLOCK":
+        return "FAILED"
+    return compare_status
 
 
 def _insert_result(
@@ -697,7 +564,19 @@ def _insert_result(
 def collect_report_data(db: DbClient, batch_id: int) -> dict:
     batch = db.query_one(f"SELECT * FROM `{TARGET_SCHEMA}`.`t_regression_batch` WHERE id = %s", (batch_id,))
     results = db.query(
-        f"SELECT * FROM `{TARGET_SCHEMA}`.`t_compare_result` WHERE batch_id = %s ORDER BY id",
+        f"""
+        SELECT
+            r.*,
+            old_req.query_params AS old_query_params,
+            old_req.request_body AS old_request_body,
+            new_req.query_params AS new_query_params,
+            new_req.request_body AS new_request_body
+        FROM `{TARGET_SCHEMA}`.`t_compare_result` r
+        LEFT JOIN `{TARGET_SCHEMA}`.`t_request_info` old_req ON old_req.id = r.old_request_info_id
+        LEFT JOIN `{TARGET_SCHEMA}`.`t_request_info` new_req ON new_req.id = r.new_request_info_id
+        WHERE r.batch_id = %s
+        ORDER BY r.id
+        """,
         (batch_id,),
     )
     detail_counts = db.query(

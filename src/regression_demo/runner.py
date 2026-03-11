@@ -66,8 +66,12 @@ def split_trace_ids_by_compare_status(results: list[dict[str, Any]]) -> tuple[li
             container.append(value)
 
     for row in results:
+        if str(row.get("pair_status") or "").upper() != "MATCHED":
+            continue
         compare_status = str(row.get("compare_status") or "").upper()
-        target = success_trace_ids if compare_status == "SUCCESS" else failed_trace_ids
+        diff_level = str(row.get("diff_level") or "").upper()
+        is_success = compare_status == "SUCCESS" and diff_level != "BLOCK"
+        target = success_trace_ids if is_success else failed_trace_ids
         for key in ("old_trace_id", "new_trace_id"):
             trace_id = normalize_trace_id(row.get(key))
             append_unique(target, trace_id)

@@ -56,8 +56,10 @@ def _validate_args(args: argparse.Namespace) -> tuple[bool, str]:
 
 def _print_trace_id_lines(title: str, trace_ids: list[str]) -> None:
     print(title)
-    for trace_id in trace_ids:
-        print(f"'{trace_id}',")
+    last_index = len(trace_ids) - 1
+    for index, trace_id in enumerate(trace_ids):
+        suffix = "," if index < last_index else ""
+        print(f"'{trace_id}'{suffix}")
 
 
 def main() -> int:
